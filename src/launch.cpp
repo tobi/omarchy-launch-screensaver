@@ -1,6 +1,7 @@
 #include "launch.h"
 
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -153,17 +154,6 @@ void quiet_walker() {
     (void)run_quiet("walker -q >/dev/null 2>&1");
 }
 
-void hypr_set_cursor_invisible(bool invisible) {
-    if (!command_exists("hyprctl"))
-        return;
-    if (invisible) {
-        (void)run_quiet("hyprctl eval 'hl.config({ cursor = { invisible = true } })' >/dev/null 2>&1 || "
-                        "hyprctl keyword cursor:invisible true >/dev/null 2>&1");
-    } else {
-        (void)run_quiet("hyprctl eval 'hl.config({ cursor = { invisible = false } })' >/dev/null 2>&1 || "
-                        "hyprctl keyword cursor:invisible false >/dev/null 2>&1");
-    }
-}
 
 void claim_screensaver_cmdline(char *argv0) {
     if (!argv0)
@@ -179,14 +169,4 @@ void claim_screensaver_cmdline(char *argv0) {
     base = base ? base + 1 : argv0;
     if (std::strlen(base) >= sizeof(kAppId) - 1)
         std::memcpy(base, kAppId, sizeof(kAppId));
-}
-
-void HyprCursorGuard::hide() {
-    hypr_set_cursor_invisible(true);
-    armed_ = true;
-}
-
-HyprCursorGuard::~HyprCursorGuard() {
-    if (armed_)
-        hypr_set_cursor_invisible(false);
 }

@@ -11,3 +11,4 @@ name = "ttfx_c"
 [dependencies]
 ttfx = { git = "https://github.com/omacom-io/ttfx" }
 clap = { version = "4", features = ["derive"] }
+libghostty-vt = "0.2.1"

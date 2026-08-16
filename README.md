@@ -11,9 +11,8 @@ cd omarchy-launch-screensaver
 ```
 
 ```
-C++ Qt host
-  ├─ rust/ttfx_c   tiny C ABI over the ttfx engine (build / next_frame)
-  └─ libghostty-vt C API from Zig (`-Demit-lib-vt`)
+C++ Qt host (window / input / paint)
+  └─ rust/ttfx_c   ttfx + libghostty-vt crate, C ABI
 ```
 
 The built binary is named **`omarchy-launch-screensaver`**. App id / layer
@@ -25,9 +24,9 @@ namespace: **`org.omarchy.screensaver`** so Hyprland rules and
 - **[ttfx](https://github.com/omacom-io/ttfx)** (MIT) — Rust port of
   [ChrisBuilds/terminaltexteffects](https://github.com/ChrisBuilds/terminaltexteffects)
   (MIT). Linked in-process via `rust/ttfx_c`.
-- **[Ghostty](https://github.com/ghostty-org/ghostty) / libghostty-vt** (MIT) —
-  VT parse + cell render-state. Built from ghostty **main** with Zig 0.16.
-  Optional: without it the pipeline uses a thin ANSI fallback.
+- **[libghostty-vt](https://crates.io/crates/libghostty-vt)** (MIT) —
+  Ghostty VT parse + cell render-state, via the Rust crate (no local Zig
+  checkout). `libghostty-vt-sys` 0.2.1 needs **Zig 0.15.2** on `PATH`.
 
 This project is MIT (see `LICENSE`).
 
@@ -135,40 +134,26 @@ this binary until you toggle it back (or pass `force`).
 ## How to build
 
 Needs: CMake, Ninja, g++, Qt6 (Core/Gui + Wayland), Rust (`cargo` on `PATH`),
-**Zig 0.16** (for Ghostty main's `libghostty-vt`). Put `~/.local/bin` on
-`PATH` if that is where `cargo` / `zig` live.
-
-Ghostty is **not** vendored. Clone main and emit the C lib, then configure:
+**Zig 0.15.2** (pulled in by `libghostty-vt-sys`; `mise install zig@0.15.2`).
 
 ```
-git clone --depth 1 https://github.com/ghostty-org/ghostty.git third_party/ghostty-main
-cd third_party/ghostty-main
-zig build -Demit-lib-vt -Doptimize=ReleaseFast --prefix ../ghostty-prefix-main
-cd ../..
-
-cmake -S . -B build -G Ninja
-cmake --build build
+make
+make run
 ctest --test-dir build --output-on-failure
 ```
 
-CMake looks for `third_party/ghostty-prefix-main` (or `ghostty-prefix`) and
-sets `HAVE_LIBGHOSTTY` when `include/ghostty/vt/terminal.h` and
-`lib/libghostty-vt.so` (or `.a`) are present. Skip the Zig step if you only
-need the ANSI fallback — the host still builds.
-
-The binary lands at `build/omarchy-launch-screensaver`.
-
-`rust/ttfx_c` is a small staticlib/cdylib; CMake invokes `cargo build --release`
-and links `libttfx_c.a`. `ttfx` itself is pulled from
-`https://github.com/omacom-io/ttfx`.
+The binary lands at `build/omarchy-launch-screensaver`. CMake runs
+`cargo build --release` on `rust/ttfx_c` and links `libttfx_c.so`.
+`ttfx` comes from `https://github.com/omacom-io/ttfx`.
 
 ## Status
 
 - Software QPainter blit of cells. Fade via `QWindow::setOpacity` (and
-  pixel alpha if the compositor ignores it).
+  pixel alpha if the compositor ignores it). `--fade N` (default 500);
+  dismiss uses N/2.
 - One ttfx engine per output (Omarchy launched one `ttfx` per monitor).
 - Effect-specific CLI flags are not wired (every effect *name* works).
 - `ttfx::recycle_output_string` is `pub(crate)`; the cdylib keeps the last
   frame instead.
-- If Zig/libghostty is missing, the pipeline still runs with a thin ANSI
-  cell parser. Ghostty types stay wired behind `HAVE_LIBGHOSTTY`.
+- VT raster is the `libghostty-vt` crate. ANSI fallback remains if raster
+  returns 0.

@@ -10,6 +10,11 @@ extern "C" {
 
 typedef struct TtfxEngine TtfxEngine;
 
+typedef struct TtfxCell {
+    uint32_t ch;
+    uint8_t fg_r, fg_g, fg_b;
+    uint8_t bg_r, bg_g, bg_b;
+} TtfxCell;
 typedef struct TtfxConfig {
     const char *input;
     int32_t cols;
@@ -45,6 +50,10 @@ void ttfx_destroy(TtfxEngine *eng);
  * -1 = error */
 int ttfx_next_frame(TtfxEngine *eng, const uint8_t **data, size_t *len);
 
+/* Raster last VT frame through libghostty-vt into cells[cols*rows].
+ * 1 = filled, 0 = use ANSI fallback, -1 = error. */
+int ttfx_raster_cells(TtfxEngine *eng, TtfxCell *cells, int cols, int rows);
+const char *ttfx_backend(const TtfxEngine *eng);
 const char *ttfx_effect_name(const TtfxEngine *eng);
 const char *ttfx_last_error(void);
 

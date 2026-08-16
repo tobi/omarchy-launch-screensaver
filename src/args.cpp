@@ -63,6 +63,7 @@ void print_help() {
         "  --include-effects LIST  limit random pick (comma-separated)\n"
         "  --exclude-effects LIST  skip these when random\n"
         "  --frame-rate N          default 120\n"
+        "  --fade N[,OUT]          appear ms (default 1000), dismiss ms (default 200)\n"
         "  --canvas-width N        0 = output width\n"
         "  --canvas-height N       0 = output height\n"
         "  --reuse-canvas          keep canvas between frames (default on)\n"
@@ -116,6 +117,27 @@ SsaverOptions parse_args(int argc, char **argv) {
             a.exclude_effects = take(i, argc, argv, "--exclude-effects", eq);
         } else if (key == "--frame-rate") {
             a.frame_rate = take_int(i, argc, argv, "--frame-rate", eq);
+        } else if (key == "--fade") {
+            const char *s = take(i, argc, argv, "--fade", eq);
+            char *end = nullptr;
+            long in = std::strtol(s, &end, 10);
+            if (end == s || in <= 0) {
+                std::cerr << "omarchy-launch-screensaver: --fade needs N or N,OUT\n";
+                std::exit(2);
+            }
+            a.fade_ms = (int)in;
+            if (*end == ',' || *end == ':') {
+                char *end2 = nullptr;
+                long out = std::strtol(end + 1, &end2, 10);
+                if (end2 == end + 1 || *end2 || out <= 0) {
+                    std::cerr << "omarchy-launch-screensaver: --fade OUT must be a positive int\n";
+                    std::exit(2);
+                }
+                a.fade_out_ms = (int)out;
+            } else if (*end) {
+                std::cerr << "omarchy-launch-screensaver: --fade needs N or N,OUT\n";
+                std::exit(2);
+            }
         } else if (key == "--canvas-width") {
             a.canvas_width = take_int(i, argc, argv, "--canvas-width", eq);
         } else if (key == "--canvas-height") {
@@ -148,6 +170,10 @@ SsaverOptions parse_args(int argc, char **argv) {
     }
     if (a.frame_rate < 0)
         a.frame_rate = 120;
+    if (a.fade_ms <= 0)
+        a.fade_ms = 1000;
+    if (a.fade_out_ms <= 0)
+        a.fade_out_ms = 200;
     if (a.frames < 0)
         a.frames = 0;
     return a;

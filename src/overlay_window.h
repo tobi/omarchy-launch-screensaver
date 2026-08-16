@@ -5,9 +5,9 @@
 #include "pipeline.h"
 
 #include <QElapsedTimer>
+#include <QPoint>
 #include <QRasterWindow>
 #include <memory>
-#include <string>
 
 class QScreen;
 
@@ -15,8 +15,9 @@ class OverlayWindow : public QRasterWindow {
     Q_OBJECT
 public:
     OverlayWindow(std::string input, SsaverOptions opt, QScreen *screen);
-
+    ~OverlayWindow() override;
     void requestDismiss();
+    void pinToScreen(QScreen *screen);
 
 signals:
     void dismissRequested();
@@ -36,8 +37,8 @@ private slots:
 
 private:
     void applyLayerShell();
-    void rebuildPipeline();
-    bool input_armed() const;
+    void rebuildPipeline(bool force = false);
+    bool pointerMoved(const QPoint &pos);
 
     std::string input_;
     SsaverOptions opt_;
@@ -47,6 +48,11 @@ private:
     Fade fade_;
     QElapsedTimer clock_;
     qint64 last_ms_ = 0;
-    bool layer_applied_ = false;
+    int grid_cols_ = 0;
+    int grid_rows_ = 0;
+    QPoint last_pointer_;
+    bool have_pointer_ = false;
+    bool mapped_ = false;
     bool dismissing_ = false;
+    bool exclusive_keys_ = false;
 };

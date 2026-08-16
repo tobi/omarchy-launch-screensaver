@@ -43,7 +43,6 @@ private:
     void parse_fallback(const uint8_t *data, size_t len, Frame &out);
 
     void *ttfx_ = nullptr;
-    void *term_ = nullptr; // ghostty_host handle when HAVE_LIBGHOSTTY
     int cols_;
     int rows_;
     VtBackend backend_ = VtBackend::Fallback;

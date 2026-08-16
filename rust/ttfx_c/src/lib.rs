@@ -1,5 +1,7 @@
-//! Tiny C ABI over the ttfx engine. Drives Effect::build / next_frame only.
+//! In-process ttfx + libghostty-vt. Drives Effect::build / next_frame only.
 //! Never calls run_effect (that writes DEC cursor junk to stdout).
+
+mod vt;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -14,11 +16,14 @@ use ttfx::engine::effect::Effect;
 use ttfx::engine::terminal::TerminalConfig;
 use ttfx::utils::rng::Rng;
 
+use crate::vt::{TtfxCell, Vt};
+
 pub struct Engine {
     ctx: EngineCtx,
     effect: Box<dyn Effect>,
     name: CString,
     last_frame: Vec<u8>,
+    vt: Option<Vt>,
 }
 
 static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
@@ -156,11 +161,13 @@ fn create_engine(
     let mut ctx = EngineCtx::new(input, config, rng, clock).map_err(|e| format!("EngineCtx::new: {e}"))?;
     let mut eff = cmd.build_effect();
     eff.build(&mut ctx).map_err(|e| format!("effect.build: {e}"))?;
+    let vt = Vt::new(cols, rows).map_err(|e| format!("libghostty-vt: {e}"))?;
     Ok(Engine {
         ctx,
         effect: eff,
         name: CString::new(name).unwrap(),
         last_frame: Vec::new(),
+        vt: Some(vt),
     })
 }
 
@@ -257,6 +264,46 @@ pub extern "C" fn ttfx_next_frame(
             }
             0
         }
+    }
+}
+
+/// Raster the last VT frame into `cells` (row-major, `cols * rows`).
+/// 1 = filled via libghostty-vt, 0 = caller should ANSI-fallback, -1 = error.
+#[no_mangle]
+pub extern "C" fn ttfx_raster_cells(
+    eng: *mut Engine,
+    cells: *mut TtfxCell,
+    cols: i32,
+    rows: i32,
+) -> i32 {
+    if eng.is_null() || cells.is_null() || cols <= 0 || rows <= 0 {
+        set_error("null argument");
+        return -1;
+    }
+    let eng = unsafe { &mut *eng };
+    let Some(vt) = eng.vt.as_mut() else {
+        return 0;
+    };
+    let n = (cols as usize).saturating_mul(rows as usize);
+    let out = unsafe { std::slice::from_raw_parts_mut(cells, n) };
+    match vt.raster(&eng.last_frame, out, cols, rows) {
+        Ok(()) => 1,
+        Err(e) => {
+            set_error(e);
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ttfx_backend(eng: *const Engine) -> *const c_char {
+    if eng.is_null() {
+        return ptr::null();
+    }
+    if unsafe { (*eng).vt.is_some() } {
+        c"libghostty".as_ptr()
+    } else {
+        c"fallback".as_ptr()
     }
 }
 

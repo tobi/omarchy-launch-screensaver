@@ -1,5 +1,4 @@
 #include "pipeline.h"
-#include "ghostty_host.h"
 #include "ttfx_c.h"
 
 #include <algorithm>
@@ -7,13 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
-bool Pipeline::libghostty_linked() {
-#ifdef HAVE_LIBGHOSTTY
-    return true;
-#else
-    return false;
-#endif
-}
+bool Pipeline::libghostty_linked() { return true; }
 
 Pipeline::Pipeline(std::string input, int cols, int rows, std::string effect,
                    const SsaverOptions *opt)
@@ -41,20 +34,12 @@ Pipeline::Pipeline(std::string input, int cols, int rows, std::string effect,
         const char *err = ttfx_last_error();
         throw std::runtime_error(err ? err : "ttfx_create failed");
     }
-#ifdef HAVE_LIBGHOSTTY
-    void *h = ghostty_host_create(cols_, rows_);
-    if (h) {
-        term_ = h;
-        backend_ = VtBackend::Libghostty;
-    }
-#endif
+    const char *be = ttfx_backend((TtfxEngine *)ttfx_);
+    backend_ = (be && std::strcmp(be, "libghostty") == 0) ? VtBackend::Libghostty
+                                                          : VtBackend::Fallback;
 }
 
 Pipeline::~Pipeline() {
-#ifdef HAVE_LIBGHOSTTY
-    if (term_)
-        ghostty_host_destroy(term_);
-#endif
     if (ttfx_)
         ttfx_destroy((TtfxEngine *)ttfx_);
 }
@@ -67,7 +52,11 @@ bool Pipeline::tick(Frame &out) {
     const uint8_t *data = nullptr;
     size_t len = 0;
     int rc = ttfx_next_frame((TtfxEngine *)ttfx_, &data, &len);
-    if (rc <= 0)
+    if (rc < 0) {
+        const char *err = ttfx_last_error();
+        throw std::runtime_error(err ? err : "ttfx_next_frame failed");
+    }
+    if (rc == 0)
         return false;
     out.vt.assign(reinterpret_cast<const char *>(data), len);
     out.cols = cols_;
@@ -78,23 +67,26 @@ bool Pipeline::tick(Frame &out) {
 }
 
 void Pipeline::feed_vt(const uint8_t *data, size_t len, Frame &out) {
-#ifdef HAVE_LIBGHOSTTY
-    if (backend_ == VtBackend::Libghostty && term_) {
-        std::vector<GhosttyHostCell> raw((size_t)cols_ * (size_t)rows_);
-        if (ghostty_host_feed(term_, data, len, raw.data(), cols_, rows_)) {
-            for (size_t i = 0; i < raw.size(); ++i) {
-                out.cells[i].ch = (char32_t)(raw[i].ch ? raw[i].ch : U' ');
-                out.cells[i].fg_r = raw[i].fg_r;
-                out.cells[i].fg_g = raw[i].fg_g;
-                out.cells[i].fg_b = raw[i].fg_b;
-                out.cells[i].bg_r = raw[i].bg_r;
-                out.cells[i].bg_g = raw[i].bg_g;
-                out.cells[i].bg_b = raw[i].bg_b;
-            }
-            return;
+    std::vector<TtfxCell> raw((size_t)cols_ * (size_t)rows_);
+    int rc = ttfx_raster_cells((TtfxEngine *)ttfx_, raw.data(), cols_, rows_);
+    if (rc == 1) {
+        backend_ = VtBackend::Libghostty;
+        for (size_t i = 0; i < raw.size(); ++i) {
+            out.cells[i].ch = (char32_t)(raw[i].ch ? raw[i].ch : U' ');
+            out.cells[i].fg_r = raw[i].fg_r;
+            out.cells[i].fg_g = raw[i].fg_g;
+            out.cells[i].fg_b = raw[i].fg_b;
+            out.cells[i].bg_r = raw[i].bg_r;
+            out.cells[i].bg_g = raw[i].bg_g;
+            out.cells[i].bg_b = raw[i].bg_b;
         }
+        return;
     }
-#endif
+    if (rc < 0) {
+        const char *err = ttfx_last_error();
+        throw std::runtime_error(err ? err : "ttfx_raster_cells failed");
+    }
+    backend_ = VtBackend::Fallback;
     parse_fallback(data, len, out);
 }
 

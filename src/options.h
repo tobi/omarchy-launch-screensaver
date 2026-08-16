@@ -15,6 +15,8 @@ struct SsaverOptions {
     int rows = 0;  // 0 = output size (overlay) or 24 (headless)
     int frames = 30;
     int frame_rate = 120;
+    int fade_ms = 1000;    // appear: desktop -> black
+    int fade_out_ms = 200; // dismiss: black -> desktop
     int canvas_width = 0;  // 0 = terminal/output cols
     int canvas_height = 0; // 0 = terminal/output rows
     bool reuse_canvas = true;
