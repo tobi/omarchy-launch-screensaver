@@ -27,6 +27,7 @@ pub struct Animation {
     options: Options,
     running: RunningEffect,
     cells: Vec<Cell>,
+    pending_frame: Option<String>,
     cols: i32,
     rows: i32,
 }
@@ -41,6 +42,7 @@ impl Animation {
             options,
             running,
             cells: vec![Cell::default(); cols as usize * rows as usize],
+            pending_frame: None,
             cols,
             rows,
         })
@@ -55,26 +57,44 @@ impl Animation {
         self.rows = rows;
         self.cells
             .resize(cols as usize * rows as usize, Cell::default());
+        self.pending_frame = None;
         self.running = build_effect(&self.input, &self.options, cols, rows)?;
         Ok(())
     }
 
-    /// Advances exactly one ttfx simulation frame, restarting completed effects.
-    pub fn advance(&mut self) -> Result<()> {
-        let frame = match self.running.effect.next_frame(&mut self.running.ctx) {
-            Some(frame) => frame,
+    /// Advances and rasterizes exactly one ttfx simulation frame.
+    /// Returns whether the resulting cell grid changed.
+    pub fn advance(&mut self) -> Result<bool> {
+        self.advance_deferred()?;
+        self.rasterize_pending()
+    }
+
+    /// Advances the simulation while deferring VT parsing until presentation.
+    pub fn advance_deferred(&mut self) -> Result<()> {
+        self.pending_frame = Some(self.next_frame()?);
+        Ok(())
+    }
+
+    /// Rasterizes the latest deferred frame, if any.
+    pub fn rasterize_pending(&mut self) -> Result<bool> {
+        let Some(frame) = self.pending_frame.take() else {
+            return Ok(false);
+        };
+        vt::raster(frame.as_bytes(), &mut self.cells, self.cols, self.rows)
+            .map_err(anyhow::Error::msg)
+    }
+
+    fn next_frame(&mut self) -> Result<String> {
+        match self.running.effect.next_frame(&mut self.running.ctx) {
+            Some(frame) => Ok(frame),
             None => {
                 self.running = build_effect(&self.input, &self.options, self.cols, self.rows)?;
                 self.running
                     .effect
                     .next_frame(&mut self.running.ctx)
-                    .ok_or_else(|| {
-                        anyhow!("ttfx effect '{}' produced no frame", self.running.name)
-                    })?
+                    .ok_or_else(|| anyhow!("ttfx effect '{}' produced no frame", self.running.name))
             }
-        };
-        vt::raster(frame.as_bytes(), &mut self.cells, self.cols, self.rows)
-            .map_err(anyhow::Error::msg)
+        }
     }
 
     pub fn cells(&self) -> &[Cell] {

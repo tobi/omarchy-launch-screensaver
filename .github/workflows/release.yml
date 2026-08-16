@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libxkbcommon-dev pkg-config
+
+      - name: Verify tag matches package version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "v${version}" = "${GITHUB_REF_NAME}"
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Smoke test binary
+        run: >-
+          target/release/omarchy-launch-screensaver
+          --headless --frames 30 --effect print --cols 40 --rows 12
+          --seed 1 --input assets/screensaver.txt
+
+      - name: Package release archive
+        run: |
+          name="omarchy-launch-screensaver-linux-${{ matrix.arch }}"
+          install -Dm755 target/release/omarchy-launch-screensaver "dist/${name}/omarchy-launch-screensaver"
+          install -Dm644 README.md "dist/${name}/README.md"
+          install -Dm644 LICENSE "dist/${name}/LICENSE"
+          tar -C "dist/${name}" -czf "dist/${name}.tar.gz" .
+          sha256sum "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attach Linux binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" dist/*
+          --repo "${GITHUB_REPOSITORY}"
+          --verify-tag --generate-notes
+          --title "omarchy-launch-screensaver ${GITHUB_REF_NAME}"

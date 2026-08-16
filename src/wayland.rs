@@ -13,7 +13,7 @@ use signal_hook::{
     flag,
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, FrameCallbackData},
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     delegate_registry,
     output::{OutputHandler, OutputState},
     reexports::{calloop::EventLoop, calloop_wayland_source::WaylandSource},
@@ -49,7 +49,7 @@ use crate::{
     vt::Cell,
 };
 
-const PRESENT_RATE: u32 = 30;
+const PRESENT_RATE: u32 = 120;
 const NAMESPACE: &str = "org.omarchy.screensaver";
 
 #[derive(Clone, Copy)]
@@ -78,6 +78,7 @@ struct OutputSurface {
     rendered_cells: Vec<Cell>,
     rendered_alpha: u8,
     rendered_grid: (i32, i32),
+    opaque_region: Option<(i32, i32)>,
 }
 
 impl OutputSurface {
@@ -106,7 +107,6 @@ struct App {
     dismissing: Option<(Instant, f32)>,
     next_engine_tick: Instant,
     next_present: Instant,
-    last_frame_hash: u64,
     last_alpha: u8,
     terminated: Arc<AtomicBool>,
     exit: bool,
@@ -152,7 +152,6 @@ pub fn run(input: String, options: Options) -> Result<()> {
         dismissing: None,
         next_engine_tick: now,
         next_present: now,
-        last_frame_hash: 0,
         last_alpha: 0,
         terminated,
         exit: false,
@@ -208,6 +207,7 @@ impl App {
             rendered_cells: Vec::new(),
             rendered_alpha: 0,
             rendered_grid: (0, 0),
+            opaque_region: None,
         });
     }
 
@@ -253,16 +253,14 @@ impl App {
             return;
         }
         let frame_duration = Duration::from_secs_f64(1.0 / self.options.frame_rate.max(1) as f64);
-        let mut advanced = false;
         let mut catchup = 0;
         while now >= self.next_engine_tick && catchup < 8 {
-            if let Some(animation) = &mut self.animation {
-                if let Err(error) = animation.advance() {
-                    self.failure = Some(error);
-                    self.exit = true;
-                    return;
-                }
-                advanced = true;
+            if let Some(animation) = &mut self.animation
+                && let Err(error) = animation.advance_deferred()
+            {
+                self.failure = Some(error);
+                self.exit = true;
+                return;
             }
             self.next_engine_tick += frame_duration;
             catchup += 1;
@@ -270,13 +268,30 @@ impl App {
         if catchup == 8 && now >= self.next_engine_tick {
             self.next_engine_tick = now + frame_duration;
         }
+        let presentation_ready = now >= self.next_present
+            && self
+                .surfaces
+                .iter()
+                .any(|surface| surface.configured && surface.frame_ready);
+        let changed = if presentation_ready {
+            match self
+                .animation
+                .as_mut()
+                .expect("animation exists")
+                .rasterize_pending()
+            {
+                Ok(changed) => changed,
+                Err(error) => {
+                    self.failure = Some(error);
+                    self.exit = true;
+                    return;
+                }
+            }
+        } else {
+            false
+        };
         let alpha = (self.opacity(now) * 255.0).round() as u8;
-        let frame_hash = self
-            .animation
-            .as_ref()
-            .map_or(0, |animation| hash_cells(animation.cells()));
-        if (advanced && frame_hash != self.last_frame_hash) || alpha != self.last_alpha {
-            self.last_frame_hash = frame_hash;
+        if changed || alpha != self.last_alpha {
             self.last_alpha = alpha;
             for surface in &mut self.surfaces {
                 surface.dirty = true;
@@ -341,6 +356,7 @@ impl App {
                 continue;
             }
             match present_surface(
+                &self.compositor,
                 &mut self.pool,
                 &mut self.rasterizer,
                 surface,
@@ -366,6 +382,7 @@ impl App {
 
 #[allow(clippy::too_many_arguments)]
 fn present_surface(
+    compositor: &CompositorState,
     pool: &mut SlotPool,
     rasterizer: &mut Rasterizer,
     surface: &mut OutputSurface,
@@ -419,6 +436,7 @@ fn present_surface(
         surface.dirty = false;
         return Ok(false);
     };
+    update_opaque_region(compositor, surface)?;
     surface
         .layer
         .wl_surface()
@@ -431,6 +449,25 @@ fn present_surface(
     surface.dirty = false;
     surface.frame_ready = false;
     Ok(true)
+}
+
+fn update_opaque_region(compositor: &CompositorState, surface: &mut OutputSurface) -> Result<()> {
+    let target = (surface.rendered_alpha == 255).then_some((surface.width, surface.height));
+    if surface.opaque_region == target {
+        return Ok(());
+    }
+    if let Some((width, height)) = target {
+        let region = Region::new(compositor).context("creating opaque region")?;
+        region.add(0, 0, width, height);
+        surface
+            .layer
+            .wl_surface()
+            .set_opaque_region(Some(region.wl_region()));
+    } else {
+        surface.layer.wl_surface().set_opaque_region(None);
+    }
+    surface.opaque_region = target;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -486,21 +523,6 @@ fn raster_surface(
         surface.rendered_grid = (cols, rows);
     }
     Ok(damage)
-}
-
-fn hash_cells(cells: &[Cell]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for cell in cells {
-        for byte in (cell.ch as u32).to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        for byte in cell.fg.into_iter().chain(cell.bg) {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-    }
-    hash
 }
 
 impl CompositorHandler for App {

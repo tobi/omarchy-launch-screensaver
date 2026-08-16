@@ -20,21 +20,20 @@ impl Default for Cell {
     }
 }
 
-pub fn raster(vt: &[u8], out: &mut [Cell], cols: i32, rows: i32) -> Result<(), &'static str> {
+pub fn raster(vt: &[u8], out: &mut [Cell], cols: i32, rows: i32) -> Result<bool, &'static str> {
     let cols = cols.max(1);
     let rows = rows.max(1);
     let need = (cols as usize).saturating_mul(rows as usize);
     if out.len() < need {
         return Err("cell buffer too small");
     }
-    out[..need].fill(Cell::default());
-    parse_width1(vt, out, cols, rows);
-    Ok(())
+    Ok(parse_width1(vt, &mut out[..need], cols, rows))
 }
 
-fn parse_width1(data: &[u8], out: &mut [Cell], cols: i32, rows: i32) {
+fn parse_width1(data: &[u8], out: &mut [Cell], cols: i32, rows: i32) -> bool {
     let (mut x, mut y) = (0i32, 0i32);
     let (mut fg, mut bg) = ([220u8; 3], [0u8; 3]);
+    let mut changed = false;
     let mut i = 0usize;
 
     while i < data.len() {
@@ -99,13 +98,14 @@ fn parse_width1(data: &[u8], out: &mut [Cell], cols: i32, rows: i32) {
                             x = (if count >= 2 { nums[1] } else { 1 } - 1).max(0);
                         }
                         b'J' => {
-                            out.fill(Cell::default());
+                            changed |= fill_cells(out, Cell::default());
                             (x, y) = (0, 0);
                         }
-                        b'K' if (0..rows).contains(&y) => {
+                        b'K' if y >= 0 && y < rows => {
                             let start = y as usize * cols as usize;
                             let from = start + (x.max(0) as usize).min(cols as usize);
-                            out[from..start + cols as usize].fill(Cell::default());
+                            changed |=
+                                fill_cells(&mut out[from..start + cols as usize], Cell::default());
                         }
                         _ => {}
                     }
@@ -132,17 +132,32 @@ fn parse_width1(data: &[u8], out: &mut [Cell], cols: i32, rows: i32) {
             }
             _ => {}
         }
-        let (codepoint, len) = utf8_at(data, i);
-        i += len;
-        if (0..rows).contains(&y) && (0..cols).contains(&x) {
-            out[y as usize * cols as usize + x as usize] = Cell {
-                ch: char::from_u32(codepoint).unwrap_or('\u{fffd}'),
-                fg,
-                bg,
-            };
+        let ch = if byte < 0x80 {
+            i += 1;
+            char::from(byte)
+        } else {
+            let (codepoint, len) = utf8_at(data, i);
+            i += len;
+            char::from_u32(codepoint).unwrap_or('\u{fffd}')
+        };
+        if y >= 0 && y < rows && x >= 0 && x < cols {
+            let index = y as usize * cols as usize + x as usize;
+            let cell = Cell { ch, fg, bg };
+            changed |= out[index] != cell;
+            out[index] = cell;
         }
         x += 1;
     }
+    changed
+}
+
+fn fill_cells(cells: &mut [Cell], value: Cell) -> bool {
+    let mut changed = false;
+    for cell in cells {
+        changed |= *cell != value;
+        *cell = value;
+    }
+    changed
 }
 
 fn utf8_at(data: &[u8], index: usize) -> (u32, usize) {
@@ -168,4 +183,19 @@ fn utf8_at(data: &[u8], index: usize) -> (u32, usize) {
         len += 1;
     }
     (codepoint, len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cell, raster};
+
+    #[test]
+    fn reports_only_visible_grid_changes() {
+        let mut cells = vec![Cell::default(); 4];
+        assert!(!raster(b"  \n  ", &mut cells, 2, 2).unwrap());
+        assert!(raster(b"A \n  ", &mut cells, 2, 2).unwrap());
+        assert!(!raster(b"A \n  ", &mut cells, 2, 2).unwrap());
+        assert!(raster(b"  \n  ", &mut cells, 2, 2).unwrap());
+        assert!(cells.iter().all(|cell| *cell == Cell::default()));
+    }
 }

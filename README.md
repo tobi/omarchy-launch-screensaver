@@ -10,7 +10,7 @@ The binary keeps Omarchy's public contract:
 - toggle: `~/.local/state/omarchy/toggles/screensaver-off`
 - one exclusive overlay on every output
 - keyboard, pointer motion, click, signal, or surface close dismisses the overlay
-- ttfx simulation defaults to 120 Hz; Wayland presentation is capped at 30 Hz
+- ttfx simulation and Wayland presentation are both capped at 120 Hz
 
 ## Architecture
 
@@ -35,13 +35,14 @@ There is no Qt, C++, C ABI, terminal emulator, terminal child, generated Wayland
 Rendering is invalidation-driven:
 
 1. ttfx advances at its requested simulation rate.
-2. A hash of the caller-owned cell grid detects unchanged frames without copying it.
+2. The VT parser reports whether the caller-owned cell grid actually changed.
 3. Fade opacity is quantized to the output alpha byte.
-4. Dirty surfaces are eligible at 30 Hz.
+4. Dirty surfaces are eligible at 120 Hz.
 5. A `wl_surface.frame` callback must release presentation pacing.
 6. `SlotPool::canvas` must confirm the persistent SHM buffer is no longer owned by the compositor.
 7. During fades, the full buffer is redrawn because every pixel's alpha changed.
 8. Once opaque, the current cells are compared with each output's last-presented snapshot; only the exact changed-cell bounding box is cleared, redrawn, damaged, attached, and committed.
+9. Fully opaque surfaces publish a matching Wayland opaque region so the compositor can skip blending the desktop underneath.
 
 Each output has one reusable SHM buffer and one small cell snapshot for incremental damage. HiDPI outputs render at their compositor scale. Glyph bitmaps are cached by `(character, scale)` and clipped to terminal-cell bounds, making partial and full rasterization byte-identical.
 
@@ -62,6 +63,8 @@ CARGO_TARGET_DIR=build/rust cargo build --release
 ```
 
 The executable lands at `build/rust/release/omarchy-launch-screensaver`.
+
+Tagged releases publish Linux archives for `x86_64` and `aarch64`, plus SHA-256 checksum files.
 
 ## Run
 

@@ -8,12 +8,12 @@ The remaining VT parser is intentionally narrow: cursor positioning, erase, line
 
 ## Separate simulation from presentation
 
-`--frame-rate` is an engine clock, not a monitor refresh cap. Lowering it to 30 slows clock-driven effects. The application therefore advances ttfx at 120 Hz by default and presents the newest frame at no more than 30 Hz.
+`--frame-rate` is the engine clock, while presentation is capped independently. The application advances ttfx at 120 Hz by default and makes the newest changed frame eligible for presentation at up to 120 Hz.
 
 Presentation has three independent gates:
 
 - content or fade opacity actually changed;
-- the 30 Hz deadline passed;
+- the 120 Hz deadline passed;
 - the compositor sent the previous `wl_surface.frame` callback and released the SHM slot.
 
 This keeps effect timing identical while avoiding redundant rasterization and commits.
@@ -28,7 +28,7 @@ The largest configured output determines the shared ttfx cell grid. Every output
 
 The animation owns one mutable cell vector. The VT parser fills it in place. Each output owns one persistent SHM buffer and one last-presented cell snapshot. The snapshot costs roughly 96 KiB at the benchmark's 182×45 grid but avoids rewriting a 56.25 MiB 5K buffer when only a small cell region changed. The rasterizer owns a glyph bitmap cache keyed by character and scale; no frame-sized image copy sits between stages.
 
-A stable cell hash rejects completely unchanged engine output before per-output comparison. Alpha is compared after conversion to the actual 8-bit surface value. During the fade, alpha changes require a full redraw. Once opaque, clipped cell glyphs make incremental redraw byte-identical to a full-frame oracle. Rasterization occurs only when a surface can immediately attach and commit its buffer.
+A stable change bit from the VT parser rejects completely unchanged engine output without a second full-grid hash. Catch-up simulation retains only the newest VT frame and defers parsing until a surface is ready to present. Alpha is compared after conversion to the actual 8-bit surface value. During the fade, alpha changes require a full redraw. Once opaque, clipped cell glyphs make incremental redraw byte-identical to a full-frame oracle, and a full-surface Wayland opaque region lets the compositor skip blending the desktop underneath. Rasterization occurs only when a surface can immediately attach and commit its buffer.
 
 ## Signals are part of dismissal
 
