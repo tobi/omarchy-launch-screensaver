@@ -1,34 +1,37 @@
 # omarchy-launch-screensaver
 #
-#   make          build
-#   make clean    remove the build tree
+#   make          release build
+#   make check    tests and compiler checks
+#   make benchmark
 #   make run      build and launch (force)
 #   make install  install to $(PREFIX)/bin
-#
-#   make run RUNFLAGS='--effect print --seed 1'
-#   make run RUNFLAGS='--headless --frames 20 --effect print --cols 40 --rows 12'
-#   make install PREFIX=$HOME/.local
 
-BUILD  ?= build
-PREFIX ?= /usr/local
-BIN    := $(BUILD)/omarchy-launch-screensaver
+PREFIX           ?= /usr/local
+CARGO            ?= cargo
+CARGO_TARGET_DIR ?= build/rust
+RUNFLAGS          ?=
+BIN               := $(CARGO_TARGET_DIR)/release/omarchy-launch-screensaver
 
-CMAKE     ?= cmake
-GENERATOR ?= Ninja
-RUNFLAGS  ?=
+export CARGO_TARGET_DIR
 
-.PHONY: all clean run install
+.PHONY: all benchmark check clean run install
 
 all:
-	$(CMAKE) -S . -B $(BUILD) -G $(GENERATOR)
-	$(CMAKE) --build $(BUILD)
+	$(CARGO) build --release
 	@echo $(BIN)
 
+benchmark:
+	$(CARGO) bench --bench render
+
+check:
+	$(CARGO) test
+	$(CARGO) check
+
 clean:
-	rm -rf $(BUILD)
+	$(CARGO) clean
 
 run: all
 	$(BIN) force $(RUNFLAGS)
 
 install: all
-	$(CMAKE) --install $(BUILD) --prefix $(PREFIX)
+	install -Dm755 $(BIN) $(DESTDIR)$(PREFIX)/bin/omarchy-launch-screensaver

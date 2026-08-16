@@ -1,27 +1,6 @@
-# Build trees
+# Rust build trees
 /build/
-/build-rust/
 /target/
-target/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-CTestTestfile.cmake
-Testing/
-*.o
-*.obj
-*.a
-*.so
-*.so.*
-*.dylib
-*.dll
-*.exe
-*.out
-compile_commands.json
-.ninja_deps
-.ninja_log
-build.ninja
-
 
 # Local experiments
 /scraps/

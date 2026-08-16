@@ -1,0 +1,24 @@
+[package]
+name = "omarchy-launch-screensaver"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+fontdue = "0.9"
+fs2 = "0.4"
+signal-hook = "0.3"
+smithay-client-toolkit = "0.21.1"
+ttfx = { git = "https://github.com/omacom-io/ttfx" }
+wayland-client = "0.31"
+[[bench]]
+name = "render"
+harness = false
+
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
