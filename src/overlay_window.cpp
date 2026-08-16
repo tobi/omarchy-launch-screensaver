@@ -19,7 +19,6 @@
 
 static constexpr qreal kFontPointSize = 18.0;
 static constexpr int kMaxFps = 30;
-static constexpr int kEngineFps = 120;
 static constexpr const char *kAppId = "org.omarchy.screensaver";
 
 static QFont screensaver_font() {
@@ -124,7 +123,6 @@ void OverlaySession::rebuildPipeline(bool force) {
         return;
     try {
         SsaverOptions engine = opt_;
-        engine.frame_rate = kEngineFps;
         engine.canvas_width = 0;
         engine.canvas_height = 0;
         pipeline_ = std::make_unique<Pipeline>(input_, cols, rows, opt_.effect, &engine);
@@ -182,8 +180,9 @@ void OverlaySession::onTick() {
         return;
     }
     if (pipeline_) {
-        const int present = clamp_fps(opt_.frame_rate);
-        const int steps = std::max(1, kEngineFps / present);
+        const int engine_fps = std::max(1, opt_.frame_rate);
+        const int present = clamp_fps(engine_fps);
+        const int steps = std::max(1, engine_fps / present);
         for (int i = 0; i < steps; ++i) {
             if (!pipeline_->tick(frame_)) {
                 rebuildPipeline(true);

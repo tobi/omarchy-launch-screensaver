@@ -91,7 +91,7 @@ omarchy-launch-screensaver [force] [options]
   -R, --random-effect     default
   --include-effects LIST
   --exclude-effects LIST
-  --frame-rate N          default 30, max 30
+  --frame-rate N          default 120
   --canvas-width N        0 = output width
   --canvas-height N       0 = output height
   --reuse-canvas
