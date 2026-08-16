@@ -22,15 +22,6 @@ compile_commands.json
 .ninja_log
 build.ninja
 
-# Ghostty full checkouts + installed prefixes (huge). Build libghostty-vt
-# with Zig from ghostty main; see README / third_party/README.md.
-/third_party/ghostty/
-/third_party/ghostty-main/
-/third_party/ghostty-prefix/
-/third_party/ghostty-prefix-main/
-.zig-cache/
-zig-out/
-zig-cache/
 
 # Local experiments
 /scraps/

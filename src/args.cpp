@@ -47,7 +47,7 @@ static uint64_t take_u64(int &i, int argc, char **argv, const char *name, const 
 
 void print_help() {
     std::cout <<
-        "omarchy-launch-screensaver — Omarchy screensaver (Qt + ttfx + libghostty)\n"
+        "omarchy-launch-screensaver — Omarchy screensaver (Qt + ttfx)\n"
         "\n"
         "Usage:\n"
         "  omarchy-launch-screensaver [force] [options]\n"

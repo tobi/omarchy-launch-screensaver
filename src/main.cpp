@@ -40,42 +40,9 @@ static int run_headless(const SsaverOptions &a, const std::string &input) {
                     ++empty_rows;
             }
         }
-        std::printf("frames=%d cells=%dx%d non_space=%d empty_rows=%d effect=%s backend=%s\n",
+        std::printf("frames=%d cells=%dx%d non_space=%d empty_rows=%d effect=%s\n",
                     frames, p.cols(), p.rows(), non_space, empty_rows,
-                    p.effect_name() ? p.effect_name() : "?",
-                    p.backend() == VtBackend::Libghostty ? "libghostty" : "fallback");
-        if (std::getenv("SSAVER_DUMP") && !fr.vt.empty()) {
-            int nls = 0, crs = 0;
-            for (unsigned char b : fr.vt) {
-                if (b == '\n')
-                    ++nls;
-                else if (b == '\r')
-                    ++crs;
-            }
-            std::printf("vt_len=%zu newlines=%d crs=%d\n", fr.vt.size(), nls, crs);
-            if (FILE *vf = std::fopen("/tmp/ssaver.vt", "wb")) {
-                std::fwrite(fr.vt.data(), 1, fr.vt.size(), vf);
-                std::fclose(vf);
-            }
-            const std::string &vt = fr.vt;
-            std::printf("cup_rows=");
-            for (size_t i = 0; i + 1 < vt.size(); ++i) {
-                if ((unsigned char)vt[i] != 0x1b || vt[i + 1] != '[')
-                    continue;
-                size_t j = i + 2;
-                int row = 0;
-                bool have = false;
-                while (j < vt.size() && vt[j] >= '0' && vt[j] <= '9') {
-                    have = true;
-                    row = row * 10 + (vt[j++] - '0');
-                }
-                if (j < vt.size() && (vt[j] == 'H' || vt[j] == 'f' || vt[j] == ';')) {
-                    if (have)
-                        std::printf("%d ", row);
-                }
-            }
-            std::printf("\n");
-        }
+                    p.effect_name() ? p.effect_name() : "?");
         if (std::getenv("SSAVER_DUMP") && fr.cols > 0 && fr.rows > 0) {
             for (int y = 0; y < fr.rows; ++y) {
                 for (int x = 0; x < fr.cols; ++x) {

@@ -45,15 +45,9 @@ TtfxEngine *ttfx_create_ex(const TtfxConfig *cfg);
 
 void ttfx_destroy(TtfxEngine *eng);
 
-/* 1 = frame ready (*data, *len valid until next call / destroy)
- * 0 = effect finished
- * -1 = error */
-int ttfx_next_frame(TtfxEngine *eng, const uint8_t **data, size_t *len);
-
-/* Raster last VT frame through libghostty-vt into cells[cols*rows].
- * 1 = filled, 0 = use ANSI fallback, -1 = error. */
-int ttfx_raster_cells(TtfxEngine *eng, TtfxCell *cells, int cols, int rows);
-const char *ttfx_backend(const TtfxEngine *eng);
+/* Advance one effect frame and raster it into cells[cols*rows].
+ * 1 = filled, 0 = effect finished, -1 = error. */
+int ttfx_next_cells(TtfxEngine *eng, TtfxCell *cells, int cols, int rows);
 const char *ttfx_effect_name(const TtfxEngine *eng);
 const char *ttfx_last_error(void);
 

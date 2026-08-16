@@ -24,10 +24,8 @@ int main() {
                     ++non_space;
             }
         }
-        std::printf("pipeline frames=%d non_space=%d effect=%s backend=%s libghostty=%s\n", frames,
-                    non_space, p.effect_name() ? p.effect_name() : "?",
-                    p.backend() == VtBackend::Libghostty ? "libghostty" : "fallback",
-                    Pipeline::libghostty_linked() ? "linked" : "not-linked");
+        std::printf("pipeline frames=%d non_space=%d effect=%s\n", frames, non_space,
+                    p.effect_name() ? p.effect_name() : "?");
         expect(frames > 0, "no frames");
         expect(non_space > 0, "no non-space cells");
         expect(p.effect_name() && std::strcmp(p.effect_name(), "print") == 0, "effect name");

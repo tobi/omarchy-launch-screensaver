@@ -1,11 +1,7 @@
-//! Raster ttfx VT bytes.
+//! Raster ttfx's VT frame into its fixed-width cell grid.
 //!
-//! Ghostty's width table treats some braille as 2 cells, so an 80-col ttfx
-//! line wraps and the leftover row looks empty. ttfx laid the frame out as
-//! width 1, so we parse the VT that way and keep Ghostty only for defaults.
-
-use libghostty_vt::style::RgbColor;
-use libghostty_vt::{RenderState, Terminal, TerminalOptions};
+//! ttfx lays every emitted symbol out as one cell. Parsing with that invariant
+//! avoids terminal-emulator Unicode-width policy changing the effect geometry.
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -33,52 +29,21 @@ impl Default for TtfxCell {
     }
 }
 
-pub struct Vt {
-    _term: Terminal<'static, 'static>,
-    _rs: RenderState<'static>,
-}
-
-impl Vt {
-    pub fn new(cols: i32, rows: i32) -> Result<Self, String> {
-        let cols = cols.max(1) as u16;
-        let rows = rows.max(1) as u16;
-        let mut term = Terminal::new(TerminalOptions {
-            cols,
-            rows,
-            max_scrollback: 0,
-        })
-        .map_err(|e| format!("Terminal::new: {e}"))?;
-        term.set_default_fg_color(Some(RgbColor {
-            r: 220,
-            g: 220,
-            b: 220,
-        }))
-        .map_err(|e| format!("set_default_fg_color: {e}"))?;
-        term.set_default_bg_color(Some(RgbColor { r: 0, g: 0, b: 0 }))
-            .map_err(|e| format!("set_default_bg_color: {e}"))?;
-        Ok(Self {
-            _term: term,
-            _rs: RenderState::new().map_err(|e| format!("RenderState::new: {e}"))?,
-        })
+pub fn raster(
+    vt: &[u8],
+    out: &mut [TtfxCell],
+    cols: i32,
+    rows: i32,
+) -> Result<(), String> {
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    let need = (cols as usize).saturating_mul(rows as usize);
+    if out.len() < need {
+        return Err("cell buffer too small".into());
     }
-
-    pub fn raster(
-        &mut self,
-        vt: &[u8],
-        out: &mut [TtfxCell],
-        cols: i32,
-        rows: i32,
-    ) -> Result<(), String> {
-        let cols = cols.max(1);
-        let rows = rows.max(1);
-        let need = (cols as usize).saturating_mul(rows as usize);
-        if out.len() < need {
-            return Err("cell buffer too small".into());
-        }
-        out[..need].fill(TtfxCell::default());
-        parse_width1(vt, out, cols, rows);
-        Ok(())
-    }
+    out[..need].fill(TtfxCell::default());
+    parse_width1(vt, out, cols, rows);
+    Ok(())
 }
 
 fn parse_width1(data: &[u8], out: &mut [TtfxCell], cols: i32, rows: i32) {
@@ -92,12 +57,12 @@ fn parse_width1(data: &[u8], out: &mut [TtfxCell], cols: i32, rows: i32) {
     let mut bb = 0u8;
     let mut i = 0usize;
 
-
     while i < data.len() {
         let b = data[i];
         if b == 0x1b && i + 1 < data.len() && data[i + 1] == b'[' {
             i += 2;
-            let mut nums: Vec<i32> = Vec::new();
+            let mut nums = [0i32; 16];
+            let mut num_count = 0usize;
             let mut cur = 0i32;
             let mut have = false;
             while i < data.len() {
@@ -107,20 +72,24 @@ fn parse_width1(data: &[u8], out: &mut [TtfxCell], cols: i32, rows: i32) {
                     cur = cur * 10 + i32::from(c - b'0');
                     have = true;
                 } else if c == b';' {
-                    nums.push(if have { cur } else { 0 });
+                    if num_count < nums.len() {
+                        nums[num_count] = if have { cur } else { 0 };
+                        num_count += 1;
+                    }
                     cur = 0;
                     have = false;
                 } else {
-                    if have {
-                        nums.push(cur);
+                    if have && num_count < nums.len() {
+                        nums[num_count] = cur;
+                        num_count += 1;
                     }
                     match c {
                         b'm' => {
-                            if nums.is_empty() {
-                                nums.push(0);
+                            if num_count == 0 {
+                                num_count = 1;
                             }
                             let mut k = 0;
-                            while k < nums.len() {
+                            while k < num_count {
                                 match nums[k] {
                                     0 => {
                                         fr = 220;
@@ -130,13 +99,13 @@ fn parse_width1(data: &[u8], out: &mut [TtfxCell], cols: i32, rows: i32) {
                                         bg = 0;
                                         bb = 0;
                                     }
-                                    38 if k + 4 < nums.len() && nums[k + 1] == 2 => {
+                                    38 if k + 4 < num_count && nums[k + 1] == 2 => {
                                         fr = nums[k + 2] as u8;
                                         fg = nums[k + 3] as u8;
                                         fb = nums[k + 4] as u8;
                                         k += 4;
                                     }
-                                    48 if k + 4 < nums.len() && nums[k + 1] == 2 => {
+                                    48 if k + 4 < num_count && nums[k + 1] == 2 => {
                                         br = nums[k + 2] as u8;
                                         bg = nums[k + 3] as u8;
                                         bb = nums[k + 4] as u8;
@@ -148,8 +117,8 @@ fn parse_width1(data: &[u8], out: &mut [TtfxCell], cols: i32, rows: i32) {
                             }
                         }
                         b'H' | b'f' => {
-                            let row = if !nums.is_empty() { nums[0] } else { 1 };
-                            let col = if nums.len() >= 2 { nums[1] } else { 1 };
+                            let row = if num_count > 0 { nums[0] } else { 1 };
+                            let col = if num_count >= 2 { nums[1] } else { 1 };
                             y = (row - 1).max(0);
                             x = (col - 1).max(0);
                         }

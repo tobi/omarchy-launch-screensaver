@@ -1,5 +1,5 @@
-//! In-process ttfx + libghostty-vt. Drives Effect::build / next_frame only.
-//! Never calls run_effect (that writes DEC cursor junk to stdout).
+//! In-process ttfx engine with a small C ABI.
+//! Drives Effect::build / next_frame; never writes terminal control bytes.
 
 mod vt;
 
@@ -16,14 +16,12 @@ use ttfx::engine::effect::Effect;
 use ttfx::engine::terminal::TerminalConfig;
 use ttfx::utils::rng::Rng;
 
-use crate::vt::{TtfxCell, Vt};
+use crate::vt::{raster, TtfxCell};
 
 pub struct Engine {
     ctx: EngineCtx,
     effect: Box<dyn Effect>,
     name: CString,
-    last_frame: Vec<u8>,
-    vt: Option<Vt>,
 }
 
 static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
@@ -161,13 +159,10 @@ fn create_engine(
     let mut ctx = EngineCtx::new(input, config, rng, clock).map_err(|e| format!("EngineCtx::new: {e}"))?;
     let mut eff = cmd.build_effect();
     eff.build(&mut ctx).map_err(|e| format!("effect.build: {e}"))?;
-    let vt = Vt::new(cols, rows).map_err(|e| format!("libghostty-vt: {e}"))?;
     Ok(Engine {
         ctx,
         effect: eff,
         name: CString::new(name).unwrap(),
-        last_frame: Vec::new(),
-        vt: Some(vt),
     })
 }
 
@@ -236,41 +231,10 @@ pub extern "C" fn ttfx_destroy(eng: *mut Engine) {
     }
 }
 
+/// Advance one ttfx frame and raster it into `cells` (row-major).
+/// Returns 1 when filled, 0 when the effect is finished, and -1 on error.
 #[no_mangle]
-pub extern "C" fn ttfx_next_frame(
-    eng: *mut Engine,
-    data: *mut *const u8,
-    len: *mut usize,
-) -> i32 {
-    if eng.is_null() || data.is_null() || len.is_null() {
-        set_error("null argument");
-        return -1;
-    }
-    let eng = unsafe { &mut *eng };
-    match eng.effect.next_frame(&mut eng.ctx) {
-        Some(frame) => {
-            // recycle_output_string is pub(crate) — we own the bytes instead.
-            eng.last_frame = frame.into_bytes();
-            unsafe {
-                *data = eng.last_frame.as_ptr();
-                *len = eng.last_frame.len();
-            }
-            1
-        }
-        None => {
-            unsafe {
-                *data = ptr::null();
-                *len = 0;
-            }
-            0
-        }
-    }
-}
-
-/// Raster the last VT frame into `cells` (row-major, `cols * rows`).
-/// 1 = filled via libghostty-vt, 0 = caller should ANSI-fallback, -1 = error.
-#[no_mangle]
-pub extern "C" fn ttfx_raster_cells(
+pub extern "C" fn ttfx_next_cells(
     eng: *mut Engine,
     cells: *mut TtfxCell,
     cols: i32,
@@ -281,29 +245,17 @@ pub extern "C" fn ttfx_raster_cells(
         return -1;
     }
     let eng = unsafe { &mut *eng };
-    let Some(vt) = eng.vt.as_mut() else {
+    let Some(frame) = eng.effect.next_frame(&mut eng.ctx) else {
         return 0;
     };
     let n = (cols as usize).saturating_mul(rows as usize);
     let out = unsafe { std::slice::from_raw_parts_mut(cells, n) };
-    match vt.raster(&eng.last_frame, out, cols, rows) {
+    match raster(frame.as_bytes(), out, cols, rows) {
         Ok(()) => 1,
         Err(e) => {
             set_error(e);
             -1
         }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn ttfx_backend(eng: *const Engine) -> *const c_char {
-    if eng.is_null() {
-        return ptr::null();
-    }
-    if unsafe { (*eng).vt.is_some() } {
-        c"libghostty".as_ptr()
-    } else {
-        c"fallback".as_ptr()
     }
 }
 

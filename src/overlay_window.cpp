@@ -165,7 +165,8 @@ void OverlaySession::rasterize() {
                 p.fillRect(x0, y0, cellW, cellH, QColor(c.bg_r, c.bg_g, c.bg_b));
             if (c.ch != U' ' && c.ch != 0) {
                 p.setPen(QColor(c.fg_r, c.fg_g, c.fg_b));
-                p.drawText(x0, y0 + ascent, QString::fromUcs4(&c.ch, 1));
+                const char32_t ch = static_cast<char32_t>(c.ch);
+                p.drawText(x0, y0 + ascent, QString::fromUcs4(&ch, 1));
             }
         }
     }

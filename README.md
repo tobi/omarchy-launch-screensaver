@@ -12,7 +12,7 @@ cd omarchy-launch-screensaver
 
 ```
 C++ Qt host (window / input / paint)
-  └─ rust/ttfx_c   ttfx + libghostty-vt crate, C ABI
+  └─ rust/ttfx_c   ttfx engine + fixed-width VT raster, C ABI
 ```
 
 The built binary is named **`omarchy-launch-screensaver`**. App id / layer
@@ -24,9 +24,6 @@ namespace: **`org.omarchy.screensaver`** so Hyprland rules and
 - **[ttfx](https://github.com/omacom-io/ttfx)** (MIT) — Rust port of
   [ChrisBuilds/terminaltexteffects](https://github.com/ChrisBuilds/terminaltexteffects)
   (MIT). Linked in-process via `rust/ttfx_c`.
-- **[libghostty-vt](https://crates.io/crates/libghostty-vt)** (MIT) —
-  Ghostty VT parse + cell render-state, via the Rust crate (no local Zig
-  checkout). `libghostty-vt-sys` 0.2.1 needs **Zig 0.15.2** on `PATH`.
 
 This project is MIT (see `LICENSE`).
 
@@ -133,8 +130,8 @@ this binary until you toggle it back (or pass `force`).
 
 ## How to build
 
-Needs: CMake, Ninja, g++, Qt6 (Core/Gui + Wayland), Rust (`cargo` on `PATH`),
-**Zig 0.15.2** (pulled in by `libghostty-vt-sys`; `mise install zig@0.15.2`).
+Needs: CMake, Ninja, g++, Qt6 (Core/Gui + Wayland), and Rust
+(`cargo` on `PATH`).
 
 ```
 make
@@ -143,7 +140,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 The binary lands at `build/omarchy-launch-screensaver`. CMake runs
-`cargo build --release` on `rust/ttfx_c` and links `libttfx_c.so`.
+`cargo build --release` on `rust/ttfx_c` and links its static library.
 `ttfx` comes from `https://github.com/omacom-io/ttfx`.
 
 ## Status
@@ -151,9 +148,7 @@ The binary lands at `build/omarchy-launch-screensaver`. CMake runs
 - Software QPainter blit of cells. Fade via `QWindow::setOpacity` (and
   pixel alpha if the compositor ignores it). `--fade N` (default 500);
   dismiss uses N/2.
-- One ttfx engine per output (Omarchy launched one `ttfx` per monitor).
+- One ttfx engine and software raster, shared by every output.
 - Effect-specific CLI flags are not wired (every effect *name* works).
-- `ttfx::recycle_output_string` is `pub(crate)`; the cdylib keeps the last
-  frame instead.
-- VT raster is the `libghostty-vt` crate. ANSI fallback remains if raster
-  returns 0.
+- The Rust bridge advances ttfx and parses its truecolor VT frame directly
+  into a caller-owned cell buffer; there is no terminal-emulator dependency.
