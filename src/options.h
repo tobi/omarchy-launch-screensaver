@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <string>
 
-// Shared CLI / engine options. Defaults match Omarchy's omarchy-screensaver
-// ttfx invocation (120 fps, canvas = output, centered, reuse, no-eol).
+// Overlay presents at most 30 fps. The ttfx engine still runs at 120
+// (stock omarchy-screensaver) so effect timing matches the original.
 struct SsaverOptions {
     bool force = false;
     bool headless = false;
@@ -14,7 +14,7 @@ struct SsaverOptions {
     int cols = 0;  // 0 = output size (overlay) or 80 (headless)
     int rows = 0;  // 0 = output size (overlay) or 24 (headless)
     int frames = 30;
-    int frame_rate = 120;
+    int frame_rate = 30;
     int fade_ms = 1000;    // appear: desktop -> black
     int fade_out_ms = 200; // dismiss: black -> desktop
     int canvas_width = 0;  // 0 = terminal/output cols

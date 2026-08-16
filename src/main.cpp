@@ -134,11 +134,13 @@ int main(int argc, char **argv) {
     app.setQuitOnLastWindowClosed(true);
 
     const auto screens = app.screens();
+    OverlaySession session(input, a);
     std::vector<std::unique_ptr<OverlayWindow>> windows;
     windows.reserve((size_t)std::max(1, (int)screens.size()));
 
     auto make_win = [&](QScreen *screen) {
-        auto win = std::make_unique<OverlayWindow>(input, a, screen);
+        auto win = std::make_unique<OverlayWindow>(session, screen);
+        session.addWindow(win.get());
         win->pinToScreen(screen);
         if (screen)
             win->setGeometry(screen->geometry());
@@ -155,12 +157,7 @@ int main(int argc, char **argv) {
     } else {
         for (QScreen *screen : screens)
             windows.push_back(make_win(screen));
-    }
-    for (auto &w : windows) {
-        QObject::connect(w.get(), &OverlayWindow::dismissRequested, [&]() {
-            for (auto &x : windows)
-                x->requestDismiss();
-        });
+
     }
 
     return app.exec();

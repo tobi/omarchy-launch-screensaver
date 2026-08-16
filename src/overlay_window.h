@@ -5,17 +5,60 @@
 #include "pipeline.h"
 
 #include <QElapsedTimer>
+#include <QImage>
+#include <QObject>
 #include <QPoint>
 #include <QRasterWindow>
 #include <memory>
+#include <string>
+#include <vector>
 
 class QScreen;
+class OverlayWindow;
+
+// One engine + one raster, sized to the largest mapped output.
+// Smaller overlays blit that image.
+class OverlaySession : public QObject {
+    Q_OBJECT
+public:
+    OverlaySession(std::string input, SsaverOptions opt, QObject *parent = nullptr);
+
+    void addWindow(OverlayWindow *w);
+    void windowReady(OverlayWindow *w);
+    void windowResized();
+    const QImage &frameImage() const { return image_; }
+    float alpha() const { return fade_.alpha(); }
+    void requestDismiss();
+
+private slots:
+    void onTick();
+
+private:
+    void rebuildPipeline(bool force);
+    void rasterize();
+    OverlayWindow *largestWindow() const;
+
+    std::string input_;
+    SsaverOptions opt_;
+    std::vector<OverlayWindow *> windows_;
+    std::unique_ptr<Pipeline> pipeline_;
+    Frame frame_;
+    Fade fade_;
+    QImage image_;
+    QElapsedTimer clock_;
+    qint64 last_ms_ = 0;
+    int grid_cols_ = 0;
+    int grid_rows_ = 0;
+    bool ticking_ = false;
+    bool dismissing_ = false;
+};
 
 class OverlayWindow : public QRasterWindow {
     Q_OBJECT
 public:
-    OverlayWindow(std::string input, SsaverOptions opt, QScreen *screen);
+    OverlayWindow(OverlaySession &session, QScreen *screen);
     ~OverlayWindow() override;
+
     void requestDismiss();
     void pinToScreen(QScreen *screen);
 
@@ -32,27 +75,14 @@ protected:
     void focusOutEvent(QFocusEvent *event) override;
     bool event(QEvent *event) override;
 
-private slots:
-    void onFrame();
-
 private:
     void applyLayerShell();
-    void rebuildPipeline(bool force = false);
     bool pointerMoved(const QPoint &pos);
 
-    std::string input_;
-    SsaverOptions opt_;
+    OverlaySession *session_ = nullptr;
     QScreen *screen_ = nullptr;
-    std::unique_ptr<Pipeline> pipeline_;
-    Frame frame_;
-    Fade fade_;
-    QElapsedTimer clock_;
-    qint64 last_ms_ = 0;
-    int grid_cols_ = 0;
-    int grid_rows_ = 0;
     QPoint last_pointer_;
     bool have_pointer_ = false;
     bool mapped_ = false;
-    bool dismissing_ = false;
     bool exclusive_keys_ = false;
 };

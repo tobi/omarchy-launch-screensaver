@@ -62,7 +62,7 @@ void print_help() {
         "  -R, --random-effect     pick a random effect (default)\n"
         "  --include-effects LIST  limit random pick (comma-separated)\n"
         "  --exclude-effects LIST  skip these when random\n"
-        "  --frame-rate N          default 120\n"
+        "  --frame-rate N          default 30, max 30\n"
         "  --fade N[,OUT]          appear ms (default 1000), dismiss ms (default 200)\n"
         "  --canvas-width N        0 = output width\n"
         "  --canvas-height N       0 = output height\n"
@@ -168,8 +168,10 @@ SsaverOptions parse_args(int argc, char **argv) {
             std::exit(2);
         }
     }
-    if (a.frame_rate < 0)
-        a.frame_rate = 120;
+    if (a.frame_rate <= 0)
+        a.frame_rate = 30;
+    if (a.frame_rate > 30)
+        a.frame_rate = 30;
     if (a.fade_ms <= 0)
         a.fade_ms = 1000;
     if (a.fade_out_ms <= 0)

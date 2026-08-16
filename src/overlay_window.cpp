@@ -1,4 +1,5 @@
 #include "overlay_window.h"
+
 #include <LayerShellQt/Window>
 #include <QCoreApplication>
 #include <QFocusEvent>
@@ -15,9 +16,11 @@
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <algorithm>
-#include <qguiapplication_platform.h>
 
-static constexpr qreal kFontPointSize = 9.0;
+static constexpr qreal kFontPointSize = 18.0;
+static constexpr int kMaxFps = 30;
+static constexpr int kEngineFps = 120;
+static constexpr const char *kAppId = "org.omarchy.screensaver";
 
 static QFont screensaver_font() {
     QFont font(QStringLiteral("JetBrainsMono Nerd Font"));
@@ -29,52 +32,173 @@ static QFont screensaver_font() {
     return font;
 }
 
-static QSize input_grid_size(const std::string &input) {
-    int cols = 0;
-    int row_cols = 0;
-    int rows = 1;
-    for (unsigned char ch : input) {
-        if (ch == '\n') {
-            cols = std::max(cols, row_cols);
-            row_cols = 0;
-            ++rows;
-        } else if (ch == '\t') {
-            row_cols += 4;
-        } else if ((ch & 0xc0) != 0x80) {
-            ++row_cols;
+static void cell_metrics(int *cell_w, int *cell_h, int *ascent = nullptr) {
+    QFontMetrics fm(screensaver_font());
+    *cell_w = std::max(1, fm.horizontalAdvance(QLatin1Char('M')));
+    *cell_h = std::max(1, fm.height());
+    if (ascent)
+        *ascent = fm.ascent();
+}
+
+static QSize output_grid(int width, int height) {
+    int cell_w = 1, cell_h = 1;
+    cell_metrics(&cell_w, &cell_h);
+    return QSize(std::max(8, width / cell_w), std::max(4, height / cell_h));
+}
+
+
+static int clamp_fps(int fps) {
+    if (fps <= 0)
+        return kMaxFps;
+    return std::min(kMaxFps, fps);
+}
+
+OverlaySession::OverlaySession(std::string input, SsaverOptions opt, QObject *parent)
+    : QObject(parent),
+      input_(std::move(input)),
+      opt_(std::move(opt)),
+      fade_((float)std::max(1, opt_.fade_ms),
+            (float)std::max(1, opt_.fade_out_ms)) {}
+
+void OverlaySession::addWindow(OverlayWindow *w) {
+    windows_.push_back(w);
+}
+
+void OverlaySession::windowReady(OverlayWindow *w) {
+    if (!pipeline_)
+        rebuildPipeline(false);
+    if (ticking_) {
+        rasterize();
+        if (w)
+            w->update();
+        return;
+    }
+    ticking_ = true;
+    clock_.start();
+    last_ms_ = 0;
+    onTick();
+    auto *timer = new QTimer(this);
+    timer->setTimerType(Qt::PreciseTimer);
+    connect(timer, &QTimer::timeout, this, &OverlaySession::onTick);
+    timer->start(std::max(1, 1000 / clamp_fps(opt_.frame_rate)));
+}
+
+void OverlaySession::requestDismiss() {
+    if (dismissing_)
+        return;
+    dismissing_ = true;
+    fade_.dismiss();
+}
+
+OverlayWindow *OverlaySession::largestWindow() const {
+    OverlayWindow *best = nullptr;
+    qint64 best_area = 0;
+    for (OverlayWindow *w : windows_) {
+        if (!w || w->width() < 32 || w->height() < 32)
+            continue;
+        const qint64 area = (qint64)w->width() * (qint64)w->height();
+        if (area > best_area) {
+            best_area = area;
+            best = w;
         }
     }
-    cols = std::max(cols, row_cols);
-    if (!input.empty() && input.back() == '\n' && rows > 1)
-        --rows;
-    return QSize(std::max(1, cols), std::max(1, rows));
+    return best;
 }
 
-static QFont fitted_font(int width, int height, int cols, int rows) {
-    QFont font = screensaver_font();
-    int low = 1;
-    int high = std::max(1, height);
-    while (low < high) {
-        const int px = low + (high - low + 1) / 2;
-        font.setPixelSize(px);
-        QFontMetrics fm(font);
-        if (fm.horizontalAdvance(QLatin1Char('M')) * cols <= width &&
-            fm.height() * rows <= height)
-            low = px;
-        else
-            high = px - 1;
+void OverlaySession::windowResized() {
+    rebuildPipeline(false);
+}
+
+void OverlaySession::rebuildPipeline(bool force) {
+    OverlayWindow *src = largestWindow();
+    if (!src)
+        return;
+    const QSize grid = output_grid(src->width(), src->height());
+    int cols = opt_.cols > 0 ? opt_.cols : grid.width();
+    int rows = opt_.rows > 0 ? opt_.rows : grid.height();
+    if (opt_.canvas_width > 0)
+        cols = opt_.canvas_width;
+    if (opt_.canvas_height > 0)
+        rows = opt_.canvas_height;
+    if (!force && pipeline_ && cols == grid_cols_ && rows == grid_rows_)
+        return;
+    try {
+        SsaverOptions engine = opt_;
+        engine.frame_rate = kEngineFps;
+        engine.canvas_width = 0;
+        engine.canvas_height = 0;
+        pipeline_ = std::make_unique<Pipeline>(input_, cols, rows, opt_.effect, &engine);
+        grid_cols_ = cols;
+        grid_rows_ = rows;
+    } catch (...) {
+        pipeline_.reset();
+        grid_cols_ = 0;
+        grid_rows_ = 0;
     }
-    font.setPixelSize(low);
-    return font;
 }
-static constexpr const char *kAppId = "org.omarchy.screensaver";
 
-OverlayWindow::OverlayWindow(std::string input, SsaverOptions opt, QScreen *screen)
-    : input_(std::move(input)),
-      opt_(std::move(opt)),
-      screen_(screen),
-      fade_((float)std::max(1, opt_.fade_ms),
-            (float)std::max(1, opt_.fade_out_ms)) {
+void OverlaySession::rasterize() {
+    OverlayWindow *src = largestWindow();
+    if (!src)
+        return;
+    const int W = src->width();
+    const int H = src->height();
+    if (image_.width() != W || image_.height() != H)
+        image_ = QImage(W, H, QImage::Format_ARGB32_Premultiplied);
+    image_.fill(qRgb(0, 0, 0));
+    if (frame_.cells.empty() || frame_.cols <= 0 || frame_.rows <= 0)
+        return;
+
+    QPainter p(&image_);
+    const int cols = frame_.cols;
+    const int rows = frame_.rows;
+    p.setFont(screensaver_font());
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+    int cellW = 1, cellH = 1, ascent = 0;
+    cell_metrics(&cellW, &cellH, &ascent);
+    const int originX = (W - cellW * cols) / 2;
+    const int originY = (H - cellH * rows) / 2;
+    for (int y = 0; y < rows; ++y) {
+        const int y0 = originY + y * cellH;
+        for (int x = 0; x < cols; ++x) {
+            const Cell &c = frame_.cells[(size_t)y * (size_t)cols + (size_t)x];
+            const int x0 = originX + x * cellW;
+            if (c.bg_r | c.bg_g | c.bg_b)
+                p.fillRect(x0, y0, cellW, cellH, QColor(c.bg_r, c.bg_g, c.bg_b));
+            if (c.ch != U' ' && c.ch != 0) {
+                p.setPen(QColor(c.fg_r, c.fg_g, c.fg_b));
+                p.drawText(x0, y0 + ascent, QString::fromUcs4(&c.ch, 1));
+            }
+        }
+    }
+}
+
+void OverlaySession::onTick() {
+    const qint64 now = clock_.elapsed();
+    fade_.tick(float(now - last_ms_));
+    last_ms_ = now;
+    if (fade_.done()) {
+        QCoreApplication::quit();
+        return;
+    }
+    if (pipeline_) {
+        const int present = clamp_fps(opt_.frame_rate);
+        const int steps = std::max(1, kEngineFps / present);
+        for (int i = 0; i < steps; ++i) {
+            if (!pipeline_->tick(frame_)) {
+                rebuildPipeline(true);
+                if (pipeline_)
+                    pipeline_->tick(frame_);
+            }
+        }
+    }
+    rasterize();
+    for (OverlayWindow *w : windows_)
+        w->update();
+}
+
+OverlayWindow::OverlayWindow(OverlaySession &session, QScreen *screen)
+    : session_(&session), screen_(screen) {
     QSurfaceFormat fmt = format();
     fmt.setAlphaBufferSize(8);
     setFormat(fmt);
@@ -132,56 +256,22 @@ bool OverlayWindow::pointerMoved(const QPoint &pos) {
     return (pos - last_pointer_).manhattanLength() > 2;
 }
 
-void OverlayWindow::rebuildPipeline(bool force) {
-    if (width() < 32 || height() < 32)
-        return;
-    const QSize input_grid = input_grid_size(input_);
-    int cols = opt_.cols > 0 ? opt_.cols : input_grid.width();
-    int rows = opt_.rows > 0 ? opt_.rows : input_grid.height();
-    if (opt_.canvas_width > 0)
-        cols = opt_.canvas_width;
-    if (opt_.canvas_height > 0)
-        rows = opt_.canvas_height;
-    if (!force && pipeline_ && cols == grid_cols_ && rows == grid_rows_)
-        return;
-    try {
-        pipeline_ = std::make_unique<Pipeline>(input_, cols, rows, opt_.effect, &opt_);
-        grid_cols_ = cols;
-        grid_rows_ = rows;
-    } catch (...) {
-        pipeline_.reset();
-        grid_cols_ = 0;
-        grid_rows_ = 0;
-    }
-}
-
 void OverlayWindow::requestDismiss() {
-    if (dismissing_)
-        return;
-    dismissing_ = true;
-    fade_.dismiss();
-    emit dismissRequested();
+    session_->requestDismiss();
 }
 
 void OverlayWindow::exposeEvent(QExposeEvent *event) {
     QRasterWindow::exposeEvent(event);
     if (!mapped_) {
         mapped_ = true;
-        clock_.start();
-        last_ms_ = 0;
-        auto *timer = new QTimer(this);
-        connect(timer, &QTimer::timeout, this, &OverlayWindow::onFrame);
-        const int fps = std::max(1, opt_.frame_rate > 0 ? opt_.frame_rate : 120);
-        timer->start(std::max(1, 1000 / fps));
+        session_->windowReady(this);
     }
-    if (!pipeline_)
-        rebuildPipeline();
 }
 
 void OverlayWindow::resizeEvent(QResizeEvent *event) {
     QRasterWindow::resizeEvent(event);
     if (mapped_)
-        rebuildPipeline();
+        session_->windowResized();
 }
 
 void OverlayWindow::keyPressEvent(QKeyEvent *) { requestDismiss(); }
@@ -201,61 +291,23 @@ bool OverlayWindow::event(QEvent *event) {
     return QRasterWindow::event(event);
 }
 
-void OverlayWindow::onFrame() {
-    const qint64 now = clock_.elapsed();
-    fade_.tick(float(now - last_ms_));
-    last_ms_ = now;
-    if (fade_.done()) {
-        QCoreApplication::quit();
-        return;
-    }
-    if (pipeline_) {
-        if (!pipeline_->tick(frame_)) {
-            rebuildPipeline(true);
-            if (pipeline_)
-                pipeline_->tick(frame_);
-        }
-    }
-    update();
-}
-
 void OverlayWindow::paintEvent(QPaintEvent *) {
     QPainter p(this);
     const int W = width();
     const int H = height();
-
-    // Bake the fade into each committed ARGB buffer. Protocol-side alpha is
-    // latched on wl_surface commit and could otherwise remain stale until an
-    // input event caused Qt to commit again.
     p.setCompositionMode(QPainter::CompositionMode_Source);
     p.fillRect(0, 0, W, H, Qt::transparent);
     p.setCompositionMode(QPainter::CompositionMode_SourceOver);
-    p.setOpacity(fade_.alpha());
+    p.setOpacity(session_->alpha());
     p.fillRect(0, 0, W, H, QColor(0, 0, 0));
-    if (frame_.cells.empty() || frame_.cols <= 0 || frame_.rows <= 0)
+
+    const QImage &img = session_->frameImage();
+    if (img.isNull() || img.width() <= 0 || img.height() <= 0)
         return;
-    const int cols = frame_.cols;
-    const int rows = frame_.rows;
-    QFont font = fitted_font(W, H, cols, rows);
-    p.setFont(font);
-    p.setRenderHint(QPainter::TextAntialiasing, true);
-    QFontMetrics fm(p.font());
-    const int cellW = std::max(1, fm.horizontalAdvance(QLatin1Char('M')));
-    const int cellH = std::max(1, fm.height());
-    const int ascent = fm.ascent();
-    const int originX = (W - cellW * cols) / 2;
-    const int originY = (H - cellH * rows) / 2;
-    for (int y = 0; y < rows; ++y) {
-        const int y0 = originY + y * cellH;
-        for (int x = 0; x < cols; ++x) {
-            const Cell &c = frame_.cells[(size_t)y * (size_t)cols + (size_t)x];
-            const int x0 = originX + x * cellW;
-            if (c.bg_r | c.bg_g | c.bg_b)
-                p.fillRect(x0, y0, cellW, cellH, QColor(c.bg_r, c.bg_g, c.bg_b));
-            if (c.ch != U' ' && c.ch != 0) {
-                p.setPen(QColor(c.fg_r, c.fg_g, c.fg_b));
-                p.drawText(x0, y0 + ascent, QString::fromUcs4(&c.ch, 1));
-            }
-        }
-    }
+
+    const QSize target = img.size().scaled(W, H, Qt::KeepAspectRatioByExpanding);
+    const QRect dest((W - target.width()) / 2, (H - target.height()) / 2,
+                     target.width(), target.height());
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    p.drawImage(dest, img);
 }
